@@ -195,7 +195,29 @@ def predict_sequence(model, sequence, device):
         with torch.no_grad():
             # Ensure sequence is properly shaped
             if isinstance(sequence, list):
-                sequence = torch.FloatTensor(sequence)
+                # Sanitize nested lists to floats
+                sanitized = []
+                for row in sequence:
+                    if isinstance(row, (list, tuple, np.ndarray)):
+                        clean_row = []
+                        for v in row:
+                            try:
+                                num = float(v)
+                            except (ValueError, TypeError):
+                                num = 0.0
+                            if isinstance(num, float) and (np.isnan(num) or np.isinf(num)):
+                                num = 0.0
+                            clean_row.append(num)
+                        sanitized.append(clean_row)
+                    else:
+                        try:
+                            num = float(row)
+                        except (ValueError, TypeError):
+                            num = 0.0
+                        if isinstance(num, float) and (np.isnan(num) or np.isinf(num)):
+                            num = 0.0
+                        sanitized.append(num)
+                sequence = torch.FloatTensor(sanitized)
             
             if len(sequence.shape) == 2:
                 sequence = sequence.unsqueeze(0)  # Add batch dimension
@@ -2515,6 +2537,7 @@ class AdvancedMLDecisionEngine:
             'meta_learner': RandomForestClassifier(n_estimators=50, random_state=42)  # Will be reinitialized with correct features
         }
         self.feature_names = []
+        self.trained_feature_names = []  # Snapshot used by trained models/scaler
         self.is_trained = False
         self.scaler = StandardScaler()
         self.input_size = input_size
@@ -2880,6 +2903,53 @@ class AdvancedMLDecisionEngine:
             
             # Increment training counter
             self.training_counter += 1
+
+            # Populate sequence buffer from recent sanitized features to enable deep model training
+            try:
+                if len(self.feature_buffer) >= self.sequence_length:
+                    # Build a recent sequence window
+                    recent = list(self.feature_buffer)[-self.sequence_length:]
+                    sequence = []
+                    for feat in recent:
+                        # Ensure dict and all names present
+                        if isinstance(feat, dict):
+                            for name in self.feature_names:
+                                if name not in feat:
+                                    feat[name] = 0.0
+                            # Sanitize to numeric vector
+                            vec = []
+                            for name in self.feature_names:
+                                val = feat.get(name, 0)
+                                try:
+                                    num = float(val)
+                                except (ValueError, TypeError):
+                                    num = 0.0
+                                if isinstance(num, float) and (np.isnan(num) or np.isinf(num)):
+                                    num = 0.0
+                                vec.append(num)
+                            sequence.append(vec)
+                        else:
+                            # Already a vector; sanitize elements
+                            row_vec = []
+                            for v in feat:
+                                try:
+                                    num = float(v)
+                                except (ValueError, TypeError):
+                                    num = 0.0
+                                if isinstance(num, float) and (np.isnan(num) or np.isinf(num)):
+                                    num = 0.0
+                                row_vec.append(num)
+                            sequence.append(row_vec)
+                    # Simple label: current regime if available, else 1
+                    seq_label = 1.0
+                    if labels and isinstance(labels, dict) and 'regime' in labels:
+                        try:
+                            seq_label = float(labels['regime'])
+                        except (ValueError, TypeError):
+                            seq_label = 1.0
+                    self.sequence_buffer.add(sequence, seq_label)
+            except Exception as e:
+                logger.debug(f"Sequence buffer population skipped: {e}")
             
             # Log training data status
             if self.training_counter % 100 == 0:
@@ -2953,6 +3023,10 @@ class AdvancedMLDecisionEngine:
             # Sanitize any remaining non-finite values
             if not np.isfinite(X).all():
                 X = np.nan_to_num(X, nan=0.0, posinf=0.0, neginf=0.0)
+
+            # Freeze trained feature order snapshot on first successful train
+            if not getattr(self, 'trained_feature_names', []):
+                self.trained_feature_names = list(self.feature_names)
             y_regime = np.array(y_regime)
             y_confidence = np.array(y_confidence)
             y_pattern = np.array(y_pattern)
@@ -2981,10 +3055,25 @@ class AdvancedMLDecisionEngine:
                 logger.info(f"Insufficient class diversity for: {insufficient_diversity}. Continuing data collection...")
                 return False
             
-            # Scale features
-            if not hasattr(self.scaler, 'mean_'):
-                self.scaler.fit(X)
-            X_scaled = self.scaler.transform(X)
+            # Build matrix in trained feature order (and fit scaler on that shape)
+            if self.trained_feature_names:
+                reorder_indices = [self.feature_names.index(n) for n in self.trained_feature_names if n in self.feature_names]
+                if len(reorder_indices) == X.shape[1]:
+                    X_ordered = X[:, reorder_indices]
+                else:
+                    X_ordered = np.zeros((X.shape[0], len(self.trained_feature_names)))
+                    name_to_idx = {n: i for i, n in enumerate(self.feature_names)}
+                    for j, n in enumerate(self.trained_feature_names):
+                        if n in name_to_idx:
+                            X_ordered[:, j] = X[:, name_to_idx[n]]
+            else:
+                X_ordered = X
+
+            # Fit scaler on the exact matrix it will later transform
+            if hasattr(self.scaler, 'n_features_in_') and getattr(self.scaler, 'n_features_in_', None) != X_ordered.shape[1]:
+                self.scaler = StandardScaler()
+            self.scaler.fit(X_ordered)
+            X_scaled = self.scaler.transform(X_ordered)
             
             # Train classification models only if they have sufficient diversity
             models_trained = []
@@ -3138,8 +3227,30 @@ class AdvancedMLDecisionEngine:
             for name in self.feature_names:
                 if name not in features:
                     features[name] = 0.0
-            feature_vector = [features.get(name, 0) for name in self.feature_names]
-            X = np.array(feature_vector).reshape(1, -1)
+            # Build vector in trained feature order to match scaler
+            if hasattr(self, 'trained_feature_names') and self.trained_feature_names:
+                feature_vector = []
+                for name in self.trained_feature_names:
+                    val = features.get(name, 0)
+                    try:
+                        num = float(val)
+                    except (ValueError, TypeError):
+                        num = 0.0
+                    if isinstance(num, float) and (np.isnan(num) or np.isinf(num)):
+                        num = 0.0
+                    feature_vector.append(num)
+            else:
+                feature_vector = []
+                for name in self.feature_names:
+                    val = features.get(name, 0)
+                    try:
+                        num = float(val)
+                    except (ValueError, TypeError):
+                        num = 0.0
+                    if isinstance(num, float) and (np.isnan(num) or np.isinf(num)):
+                        num = 0.0
+                    feature_vector.append(num)
+            X = np.array(feature_vector, dtype=float).reshape(1, -1)
             X_scaled = self.scaler.transform(X)
             
             # Analyze with SHAP
@@ -3211,17 +3322,45 @@ class AdvancedMLDecisionEngine:
             return None
             
         try:
-            # Prepare feature vector
-            feature_vector = [features.get(name, 0) for name in self.feature_names]
-            X = np.array(feature_vector).reshape(1, -1)
+            # Prepare feature vector (sanitize to numeric floats)
+            feature_vector = []
+            for name in self.feature_names:
+                value = features.get(name, 0)
+                if value is None:
+                    coerced = 0.0
+                else:
+                    try:
+                        coerced = float(value)
+                    except (ValueError, TypeError):
+                        coerced = 0.0
+                if isinstance(coerced, float) and (np.isnan(coerced) or np.isinf(coerced)):
+                    coerced = 0.0
+                feature_vector.append(coerced)
+            X = np.array(feature_vector, dtype=float).reshape(1, -1)
             
-            # Scale features
+            # Scale features using trained feature order
             try:
-                X_scaled = self.scaler.transform(X)
+                if hasattr(self, 'trained_feature_names') and self.trained_feature_names:
+                    # Reorder X to match trained feature order
+                    reorder_indices = [self.feature_names.index(n) for n in self.trained_feature_names if n in self.feature_names]
+                    if len(reorder_indices) == X.shape[1]:
+                        X_ordered = X[:, reorder_indices]
+                    else:
+                        # Build full vector in trained order with zeros for missing
+                        X_ordered = np.zeros((X.shape[0], len(self.trained_feature_names)))
+                        name_to_idx = {n: i for i, n in enumerate(self.feature_names)}
+                        for j, n in enumerate(self.trained_feature_names):
+                            if n in name_to_idx:
+                                X_ordered[:, j] = X[:, name_to_idx[n]]
+                    X_scaled = self.scaler.transform(X_ordered)
+                else:
+                    X_scaled = self.scaler.transform(X)
             except Exception as e:
                 logger.warning(f"Feature scaling failed: {e}")
                 # Use unscaled features as fallback
-                X_scaled = X
+                X_scaled = X if not hasattr(self, 'trained_feature_names') or not self.trained_feature_names else (
+                    X[:, [self.feature_names.index(n) for n in self.trained_feature_names if n in self.feature_names]]
+                )
             
             # Get predictions from available models with fallbacks
             regime_pred = 0
@@ -3312,11 +3451,33 @@ class AdvancedMLDecisionEngine:
                             for name in self.feature_names:
                                 if name not in feat_dict:
                                     feat_dict[name] = 0.0
-                            vector = [feat_dict.get(name, 0) for name in self.feature_names]
+                            vector = []
+                            for name in self.feature_names:
+                                val = feat_dict.get(name, 0)
+                                if val is None:
+                                    num = 0.0
+                                else:
+                                    try:
+                                        num = float(val)
+                                    except (ValueError, TypeError):
+                                        num = 0.0
+                                if isinstance(num, float) and (np.isnan(num) or np.isinf(num)):
+                                    num = 0.0
+                                vector.append(num)
                             sequence_vectors.append(vector)
                         else:
                             # If it's already a vector, use it directly
-                            sequence_vectors.append(feat_dict)
+                            # Sanitize vector elements
+                            sanitized = []
+                            for val in feat_dict:
+                                try:
+                                    num = float(val)
+                                except (ValueError, TypeError):
+                                    num = 0.0
+                                if isinstance(num, float) and (np.isnan(num) or np.isinf(num)):
+                                    num = 0.0
+                                sanitized.append(num)
+                            sequence_vectors.append(sanitized)
                     
                     # Add current features as the last element
                     sequence_vectors.append(feature_vector)
@@ -3394,20 +3555,21 @@ class AdvancedMLDecisionEngine:
                 elif hasattr(model, 'coef_'):
                     model_features[name] = model.coef_.shape[1]
                     
-            # Verify all models use same number of features
+            # Verify all models use same number of features (compare to trained_feature_names if available)
             feature_counts = set(model_features.values())
             if len(feature_counts) > 1:
                 logger.error(f"Feature count mismatch across models: {model_features}")
                 return False
-                
-            if len(self.feature_names) != list(feature_counts)[0]:
-                logger.error(f"Feature count mismatch: names={len(self.feature_names)}, model={list(feature_counts)[0]}")
+            expected_count = len(self.trained_feature_names) if getattr(self, 'trained_feature_names', []) else (list(feature_counts)[0] if feature_counts else len(self.feature_names))
+            if expected_count != (list(feature_counts)[0] if feature_counts else expected_count):
+                logger.error(f"Feature count mismatch: expected={expected_count}, model={(list(feature_counts)[0] if feature_counts else 'unknown')}")
                 return False
 
             # Save model data
             model_data = {  
                 'models': {},
                 'feature_names': self.feature_names,
+                'trained_feature_names': self.trained_feature_names or self.feature_names,
                 'is_trained': self.is_trained,
                 'scaler': self.scaler,
                 'input_size': self.input_size,
@@ -3429,7 +3591,8 @@ class AdvancedMLDecisionEngine:
                     'optimizer_state_dict': self.optimizer.state_dict(),
                     'input_size': self.input_size,
                     'sequence_length': self.sequence_length,
-                    'feature_names': self.feature_names  # Save features for LSTM too
+                    'feature_names': self.feature_names,  # Save features for LSTM too
+                    'trained_feature_names': self.trained_feature_names or self.feature_names
                 }, self.deep_model_path)
 
             logger.info("All models saved successfully with feature verification")
@@ -3457,6 +3620,7 @@ class AdvancedMLDecisionEngine:
 
             # Load other data
             self.feature_names = model_data.get('feature_names', [])
+            self.trained_feature_names = model_data.get('trained_feature_names', self.feature_names)
             self.is_trained = model_data.get('is_trained', False)
             self.scaler = model_data.get('scaler', StandardScaler())
             self.input_size = model_data.get('input_size', 50)
@@ -5730,7 +5894,12 @@ class SHAPFeatureAnalyzer:
             return True
             
         except Exception as e:
-            logger.error(f"SHAP explainer initialization error: {e}")
+            # Downgrade known multiclass GradientBoosting limitation to warning
+            msg = str(e)
+            if 'GradientBoostingClassifier is only supported for binary classification' in msg:
+                logger.warning(f"SHAP explainer limitation: {e}")
+            else:
+                logger.error(f"SHAP explainer initialization error: {e}")
             return False
     
     def analyze_feature_importance(self, model, X_sample, feature_names, model_name='regime_classifier'):
@@ -5854,6 +6023,94 @@ class SHAPFeatureAnalyzer:
         importance_dict = self.shap_values[model_name]['importance']
         sorted_importance = sorted(importance_dict.items(), key=lambda x: x[1], reverse=True)
         return sorted_importance[:top_n]
+
+    def generate_feature_report(self, model_name='regime_classifier', top_n=10):
+        """Generate a simple text report of SHAP feature importance."""
+        if model_name not in self.shap_values:
+            return "No SHAP results available."
+        try:
+            importance = self.shap_values[model_name]['importance']
+            sorted_items = sorted(importance.items(), key=lambda x: x[1], reverse=True)
+            lines = [
+                "\n" + "="*60,
+                f"SHAP Feature Importance Report: {model_name}",
+                "="*60
+            ]
+            for i, (feat, val) in enumerate(sorted_items[:top_n], start=1):
+                lines.append(f"{i:2d}. {feat}: {val:.6f}")
+            lines.append("="*60)
+            return "\n".join(lines)
+        except Exception as e:
+            logger.warning(f"Failed generating SHAP report: {e}")
+            return "SHAP report generation failed."
+
+    def save_feature_importance_plot(self, model_name='regime_classifier', top_n=20):
+        """Save a bar plot of top SHAP feature importances."""
+        if model_name not in self.shap_values:
+            return False
+        try:
+            try:
+                import matplotlib.pyplot as plt
+            except Exception as e:
+                logger.warning(f"matplotlib not available for SHAP plotting: {e}")
+                return False
+            importance = self.shap_values[model_name]['importance']
+            sorted_items = sorted(importance.items(), key=lambda x: x[1], reverse=True)[:top_n]
+            features = [k for k, _ in sorted_items][::-1]
+            values = [v for _, v in sorted_items][::-1]
+            plt.figure(figsize=(8, max(4, len(features)*0.3)))
+            plt.barh(features, values)
+            plt.title(f"SHAP Feature Importance: {model_name}")
+            plt.xlabel("Mean |SHAP value|")
+            plt.tight_layout()
+            filename = f"shap_feature_importance_{model_name}.png"
+            plt.savefig(filename)
+            plt.close()
+            return True
+        except Exception as e:
+            logger.warning(f"Failed saving SHAP importance plot: {e}")
+            return False
+
+    def export_feature_importance_csv(self, model_name='regime_classifier', filepath=None):
+        """Export SHAP feature importances to CSV."""
+        if model_name not in self.shap_values:
+            return False
+        try:
+            import csv
+            importance = self.shap_values[model_name]['importance']
+            sorted_items = sorted(importance.items(), key=lambda x: x[1], reverse=True)
+            path = filepath or f"shap_feature_importance_{model_name}.csv"
+            with open(path, mode='w', newline='', encoding='utf-8') as f:
+                writer = csv.writer(f)
+                writer.writerow(["feature", "importance"])
+                for feat, val in sorted_items:
+                    try:
+                        writer.writerow([feat, float(val)])
+                    except Exception:
+                        writer.writerow([feat, 0.0])
+            return True
+        except Exception as e:
+            logger.warning(f"Failed exporting SHAP importance CSV: {e}")
+            return False
+
+    def track_feature_importance_over_time(self, model_name='regime_classifier'):
+        """Record snapshot of feature importance for trend analysis."""
+        try:
+            if model_name not in self.shap_values:
+                return False
+            snapshot = {
+                'model': model_name,
+                'timestamp': datetime.now(),
+                'importance': self.shap_values[model_name]['importance'].copy()
+            }
+            self.feature_importance_history.append(snapshot)
+            # Keep history bounded
+            if len(self.feature_importance_history) > 1000:
+                self.feature_importance_history = self.feature_importance_history[-500:]
+            return True
+        except Exception as e:
+            logger.warning(f"Failed to track SHAP importance over time: {e}")
+            return False
 
 # ================================
 # Feature Caching System for Performance
