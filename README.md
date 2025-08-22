@@ -255,3 +255,134 @@ MIT License. Feel free to fork and adapt.
 <img width="822" height="517" alt="Screenshot 2025-08-22 115322" src="https://github.com/user-attachments/assets/249b363c-8d3f-496c-ad70-3a09ff8c3a4d" />
 
 <img width="793" height="560" alt="Screenshot 2025-08-22 115500" src="https://github.com/user-attachments/assets/ff76833d-77b8-4eac-b27d-7b51caa72234" />
+
+flowchart TD
+    A[🚀 System Start] --> B[Initialize Components]
+    B --> C[Load Existing Models]
+    C --> D[Initialize with Stored Data]
+    D --> E[Main Analysis Loop]
+    
+    E --> F{Market Hours?}
+    
+    F -->|Yes - Live Mode| G[🟢 LIVE TRADING MODE]
+    F -->|No - Offline Mode| H[🌙 OFFLINE SIMULATION MODE]
+    
+    G --> I[Fetch Live Option Data]
+    I --> J{Data Fetch Success?}
+    J -->|No| K[Use Fallback Data]
+    J -->|Yes| L[Store Live Data]
+    
+    H --> M[Load Stored Data]
+    M --> N[Create Trading Simulation]
+    N --> O[Use Sequential Data]
+    
+    K --> P[Get Nearest Strikes]
+    L --> P
+    O --> P
+    
+    P --> Q[Extract ML Features]
+    Q --> R[Market Regime Detection]
+    R --> S[ML Analysis & Predictions]
+    
+    S --> T{ML Model Trained?}
+    T -->|No| U[Use Traditional Analysis]
+    T -->|Yes| V[Advanced ML Predictions]
+    
+    U --> W[Feature-based Signals]
+    V --> X[Ensemble ML Signals]
+    
+    W --> Y[Signal Generation]
+    X --> Y
+    
+    Y --> Z{Paper Trade Active?}
+    
+    Z -->|Yes| AA[Check Exit Conditions]
+    Z -->|No| BB[Check Entry Conditions]
+    
+    AA --> CC{Exit Signal?}
+    CC -->|Yes| DD[🚨 Exit Trade]
+    CC -->|No| EE[Continue Monitoring]
+    
+    BB --> FF{Signal Strength > Threshold?}
+    FF -->|Yes| GG[Enter Paper Trade]
+    FF -->|No| HH[No Action]
+    
+    DD --> II[📡 Send EXIT Signal to Tradetron]
+    GG --> JJ[📡 Send ENTRY Signal to Tradetron]
+    
+    II --> KK[Update ML with Trade Outcome]
+    JJ --> LL[Start Position Monitoring]
+    
+    KK --> MM[Calculate Performance Metrics]
+    LL --> EE
+    HH --> EE
+    
+    MM --> NN[Continuous Learning Update]
+    EE --> NN
+    
+    NN --> OO{Retrain Models?}
+    OO -->|Yes| PP[🔄 Model Training]
+    OO -->|No| QQ[Collect Market Data]
+    
+    PP --> RR[SHAP Feature Analysis]
+    RR --> SS[Save Updated Models]
+    SS --> QQ
+    
+    QQ --> TT[Risk Management Check]
+    TT --> UU[Performance Display]
+    UU --> VV[System Cleanup]
+    VV --> WW[Sleep & Wait]
+    
+    WW --> E
+    
+    subgraph "🧠 ML Components"
+        XX[Random Forest Classifier]
+        YY[Gradient Boosting Models]
+        ZZ[LSTM Deep Learning]
+        AAA[SHAP Explainer]
+        XX --> YY --> ZZ --> AAA
+    end
+    
+    subgraph "💰 Risk Management"
+        BBB[Position Sizing]
+        CCC[Stop Loss Calculation]
+        DDD[Trailing Stop Logic]
+        EEE[Portfolio Risk Check]
+        BBB --> CCC --> DDD --> EEE
+    end
+    
+    subgraph "📊 Data Management"
+        FFF[Live Data Storage]
+        GGG[Historical Data Access]
+        HHH[Feature Extraction]
+        III[Data Cleanup]
+        FFF --> GGG --> HHH --> III
+    end
+    
+    subgraph "🎯 Signal Types"
+        JJJ[🟢 SHORT PUT<br/>Signal = 1]
+        KKK[🔴 SHORT CALL<br/>Signal = -1]
+        LLL[⚪ NEUTRAL<br/>Signal = 0]
+    end
+    
+    S -.-> XX
+    Y -.-> JJJ
+    Y -.-> KKK
+    Y -.-> LLL
+    
+    L -.-> FFF
+    Q -.-> HHH
+    GG -.-> BBB
+    AA -.-> CCC
+    
+    style A fill:#ff9999
+    style G fill:#90EE90
+    style H fill:#87CEEB
+    style DD fill:#FFB6C1
+    style GG fill:#98FB98
+    style II fill:#FFA500
+    style JJ fill:#FFA500
+    style PP fill:#DDA0DD
+    style JJJ fill:#90EE90
+    style KKK fill:#FFB6C1
+    style LLL fill:#F0F0F0
