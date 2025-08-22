@@ -211,7 +211,7 @@ For questions, feedback, or collaboration:
 
 📧 Email: uday14viru@gmail.com  
 🔗 Tradetron Strategy Page: https://tradetron.tech/strategy/7909313 (Duplicate, you can modify to add stoploss and target, and other technical analysis using tradetron keywords )
-
+```
 **Need to generate API token in Tradetron after duplicating the strategy**
         self.TRADETRON_URLS = {
             1: "https://api.tradetron.tech/api?auth-token=<YOURAPITOKEN>&key=gap&value=1",
@@ -225,7 +225,7 @@ self.TRADETRON_URLS = {
             -1: "https://api.tradetron.tech/api?auth-token=2621e9d9-5349-41bf-b4d4-27acad38abe&key=gap&value=-1",
             0: "https://api.tradetron.tech/api?auth-token=2621e9d9-5349-41bf-b4d4-27acad38abe&key=gap&value=0"
         }
-
+```
 ---
 
 ## 📄 License
