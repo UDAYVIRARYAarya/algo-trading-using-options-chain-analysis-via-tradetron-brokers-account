@@ -242,4 +242,16 @@ MIT License. Feel free to fork and adapt.
 
 ---
 
-> ⚠️ **Disclaimer**: This software is for educational and research purposes only. Options trading involves high risk. Use at your discretion. All code is generated using AI. 
+> ⚠️ **Disclaimer**: This software is for educational and research purposes only. Options trading involves high risk. Use at your discretion. All code is generated using AI.
+
+**Follow to generate token**
+
+<img width="866" height="254" alt="Screenshot 2025-08-22 114928" src="https://github.com/user-attachments/assets/2585a968-fb62-4920-af25-cb2cb93a632b" />
+
+<img width="848" height="247" alt="Screenshot 2025-08-22 115147" src="https://github.com/user-attachments/assets/435c42b0-4ba0-4928-bb96-d9b2717e3883" />
+
+<img width="782" height="495" alt="Screenshot 2025-08-22 115244" src="https://github.com/user-attachments/assets/f0e45446-8589-420f-8388-6f3982b042af" />
+
+<img width="822" height="517" alt="Screenshot 2025-08-22 115322" src="https://github.com/user-attachments/assets/249b363c-8d3f-496c-ad70-3a09ff8c3a4d" />
+
+<img width="793" height="560" alt="Screenshot 2025-08-22 115500" src="https://github.com/user-attachments/assets/ff76833d-77b8-4eac-b27d-7b51caa72234" />
