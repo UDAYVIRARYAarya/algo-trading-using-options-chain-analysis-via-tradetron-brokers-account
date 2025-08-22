@@ -1924,6 +1924,7 @@ class Config:
     PAPER_TRADE_MULTIPLIER = int(os.getenv('PAPER_TRADE_MULTIPLIER', '75'))
     MAX_POSITION_SIZE = int(os.getenv('MAX_POSITION_SIZE', '1000'))
     LOT_SIZE = int(os.getenv('LOT_SIZE', '75'))  # 1 lot = 75 contracts for Nifty options
+    SIGNAL_STRENGTH_THRESHOLD = int(os.getenv('SIGNAL_STRENGTH_THRESHOLD', '2'))
     
     # Risk Management
     MAX_RISK_PER_TRADE = float(os.getenv('MAX_RISK_PER_TRADE', '0.015'))
@@ -2678,6 +2679,12 @@ class AdvancedMLDecisionEngine:
                 if not isinstance(features[key], float):
                     features[key] = float(features[key])
             
+            # Ensure all expected features exist to maintain consistent model input size
+            if self.feature_names:
+                for name in self.feature_names:
+                    if name not in features:
+                        features[name] = 0.0
+
             # Final validation
             validated_features = validate_and_clean_features(features)
             if validated_features is None:
@@ -2846,11 +2853,21 @@ class AdvancedMLDecisionEngine:
                 # Remove oldest samples but keep recent ones
                 self.training_data = self.training_data[-self.max_training_samples:]
             
-            # Update feature names if not set or if size changed
-            if not self.feature_names or len(self.feature_names) != len(features):
+            # Initialize or extend feature_names without shrinking to prevent scaler/model mismatch
+            if not self.feature_names:
                 self.feature_names = list(features.keys())
                 self.input_size = len(self.feature_names)
-                logger.info(f"Feature names updated: {self.input_size} features")
+                logger.info(f"Feature names initialized: {self.input_size} features")
+            else:
+                # Append any new features not seen before, keep order stable
+                added = 0
+                for name in features.keys():
+                    if name not in self.feature_names:
+                        self.feature_names.append(name)
+                        added += 1
+                if added:
+                    self.input_size = len(self.feature_names)
+                    logger.info(f"Feature names extended by {added}: now {self.input_size} features")
                 
                 # Reinitialize deep model with correct input size
                 self.deep_model = LSTMSignalPredictor(
@@ -2895,7 +2912,21 @@ class AdvancedMLDecisionEngine:
                 trade_data = sample.get('trade_data', {})
                 
                 # Extract feature values
-                feature_values = [features.get(name, 0) for name in self.feature_names]
+                feature_values = []
+                for name in self.feature_names:
+                    value = features.get(name, 0)
+                    # Coerce to numeric and sanitize
+                    if value is None:
+                        coerced = 0.0
+                    else:
+                        try:
+                            coerced = float(value)
+                        except (ValueError, TypeError):
+                            coerced = 0.0
+                    # Replace NaN/Inf after coercion
+                    if isinstance(coerced, float) and (np.isnan(coerced) or np.isinf(coerced)):
+                        coerced = 0.0
+                    feature_values.append(coerced)
                 X.append(feature_values)
                 
                 # Generate labels if not provided
@@ -2913,8 +2944,15 @@ class AdvancedMLDecisionEngine:
                 y_stop_loss.append(labels.get('stop_loss_pct', 0.10))
                 y_trailing_stop.append(labels.get('trailing_stop_pct', 0.5))
             
-            # Convert to numpy arrays
-            X = np.array(X)
+            # Convert to numpy arrays (enforce numeric dtype)
+            X = np.array(X, dtype=float)
+            # Guard against empty or invalid shapes
+            if X.ndim != 2 or X.shape[0] == 0 or X.shape[1] == 0:
+                logger.info("No valid feature data to train. Skipping this cycle.")
+                return False
+            # Sanitize any remaining non-finite values
+            if not np.isfinite(X).all():
+                X = np.nan_to_num(X, nan=0.0, posinf=0.0, neginf=0.0)
             y_regime = np.array(y_regime)
             y_confidence = np.array(y_confidence)
             y_pattern = np.array(y_pattern)
@@ -3096,7 +3134,10 @@ class AdvancedMLDecisionEngine:
             return None
             
         try:
-            # Prepare feature vector
+            # Prepare feature vector (ensure all expected features exist)
+            for name in self.feature_names:
+                if name not in features:
+                    features[name] = 0.0
             feature_vector = [features.get(name, 0) for name in self.feature_names]
             X = np.array(feature_vector).reshape(1, -1)
             X_scaled = self.scaler.transform(X)
@@ -3191,16 +3232,19 @@ class AdvancedMLDecisionEngine:
             stop_loss_pct = 0.10
             trailing_stop_pct = 0.5
             
-            # Ensure feature vector has correct size
+            # Ensure feature vector has correct size (pad if necessary)
             if len(feature_vector) != len(self.feature_names):
                 logger.warning(f"Feature vector size mismatch: {len(feature_vector)} vs {len(self.feature_names)}")
-                # Pad or truncate to match expected size
                 if len(feature_vector) < len(self.feature_names):
                     feature_vector.extend([0.0] * (len(self.feature_names) - len(feature_vector)))
                 else:
                     feature_vector = feature_vector[:len(self.feature_names)]
                 X = np.array(feature_vector).reshape(1, -1)
-                X_scaled = self.scaler.transform(X)
+                try:
+                    X_scaled = self.scaler.transform(X)
+                except Exception as e:
+                    logger.warning(f"Rescale after padding failed: {e}")
+                    X_scaled = X
             
             # Try to get predictions from trained models
             try:
@@ -3264,6 +3308,10 @@ class AdvancedMLDecisionEngine:
                     for feat_dict in recent_features:
                         if isinstance(feat_dict, dict):
                             # Convert dict to vector using feature names order
+                            # Ensure all names exist in dict to maintain stable length
+                            for name in self.feature_names:
+                                if name not in feat_dict:
+                                    feat_dict[name] = 0.0
                             vector = [feat_dict.get(name, 0) for name in self.feature_names]
                             sequence_vectors.append(vector)
                         else:
@@ -3488,6 +3536,12 @@ class AdvancedMLDecisionEngine:
             logger.error(f"Performance metrics display error: {e}")
 
 class OptimizedATMAnalyzer:
+    def flow(self, code, message=""):
+        try:
+            logger.info(f"[FLOW:{code}] {message}")
+        except Exception:
+            pass
+
     def __init__(self):
         self.headers = {
             'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
@@ -3519,6 +3573,10 @@ class OptimizedATMAnalyzer:
         self.ml_engine = AdvancedMLDecisionEngine()
         self.ml_engine.data_storage = self.data_storage  # Assign data_storage reference
         self.training_counter = 0
+
+        # Flow: A -> B
+        self.flow('A', 'System Start')
+        self.flow('B', 'Initialize Components')
         
         # Enhanced Components
         self.risk_manager = AdvancedRiskManager()
@@ -3544,9 +3602,9 @@ class OptimizedATMAnalyzer:
         
         # Tradetron URLs
         self.TRADETRON_URLS = {
-            1: "https://api.tradetron.tech/api?auth-token=<YOURAPITOKEN>&key=gap&value=1",
-            -1: "https://api.tradetron.tech/api?auth-token=YOURAPITOKEN&key=gap&value=-1",
-            0: "https://api.tradetron.tech/api?auth-token=YOURAPITOKEN&key=gap&value=0"
+            1: "https://api.tradetron.tech/api?auth-token=2621e9d9-5349-41bf-b4d4-27aca0d38abe&key=gap&value=1",
+            -1: "https://api.tradetron.tech/api?auth-token=2621e9d9-5349-41bf-b4d4-27aca0d38abe&key=gap&value=-1",
+            0: "https://api.tradetron.tech/api?auth-token=2621e9d9-5349-41bf-b4d4-27aca0d38abe&key=gap&value=0"
         }
 
         # Paper trade tracking
@@ -3557,9 +3615,11 @@ class OptimizedATMAnalyzer:
         
         # Load existing models
         self.ml_engine.load_models()
+        self.flow('C', 'Load Existing Models')
         
         # Initialize with stored data if available
         self.initialize_with_stored_data()
+        self.flow('D', 'Initialize with Stored Data')
         
         # Initialize regime detector with historical price data
         self.initialize_regime_detector_with_stored_data()
@@ -4655,10 +4715,18 @@ class OptimizedATMAnalyzer:
         stored_data_index = 0
         last_data_load_time = 0
         
+        self.flow('E', 'Main Analysis Loop')
         while True:
             try:
                 current_time = datetime.now().strftime('%H:%M:%S')
                 is_market_hours = self.data_storage.is_market_hours()
+
+                # Flow: F branch
+                self.flow('F', f"Market Hours? {'Yes' if is_market_hours else 'No'}")
+                if is_market_hours:
+                    self.flow('G', 'LIVE TRADING MODE')
+                else:
+                    self.flow('H', 'OFFLINE SIMULATION MODE')
                 
                 # Periodic cleanup every 100 iterations
                 cleanup_counter += 1
@@ -4671,11 +4739,14 @@ class OptimizedATMAnalyzer:
                 df, underlying_value = None, None
                 if is_market_hours:
                     df, underlying_value = self.fetch_option_data()
+                    self.flow('I', 'Fetch Live Option Data')
                 
                     if df is not None and underlying_value is not None:
+                        self.flow('J', 'Data Fetch Success')
                         # Store live data during market hours
                         timestamp = datetime.now().replace(second=0, microsecond=0)
                         self.data_storage.store_live_data(df, underlying_value, timestamp)
+                        self.flow('L', 'Store Live Data')
                         
                         # Update fallback data for offline mode
                         last_valid_df = df.copy()
@@ -4683,11 +4754,20 @@ class OptimizedATMAnalyzer:
                         
                         consecutive_fails = 0  # Reset failure counter on success
                     else:
+                        self.flow('J', 'Data Fetch Failed')
+                        # Fallback to last valid live data within live mode
                         consecutive_fails += 1
-                        if consecutive_fails < 3:  # Try a few times before giving up
-                            print(f"{current_time} | ⚠️ Data fetch failed, retrying... ({consecutive_fails}/3)")
-                            time.sleep(30)
-                            continue
+                        if last_valid_df is not None and last_valid_underlying is not None:
+                            df = last_valid_df.copy()
+                            underlying_value = last_valid_underlying
+                            df['Timestamp'] = datetime.now().replace(second=0, microsecond=0)
+                            print(f"{current_time} | 🟡 LIVE MODE | Using fallback live snapshot | UND: {underlying_value:.2f}")
+                            self.flow('K', 'Use Fallback Data')
+                        else:
+                            if consecutive_fails < 3:  # Try a few times before giving up
+                                print(f"{current_time} | ⚠️ Data fetch failed, retrying... ({consecutive_fails}/3)")
+                                time.sleep(30)
+                                continue
                 
                 # Handle offline mode - use stored data or fallback data
                 if not is_market_hours or (df is None and underlying_value is None):
@@ -4697,7 +4777,9 @@ class OptimizedATMAnalyzer:
                         raw_data = self.data_storage.get_all_available_data()  # Use comprehensive data loader
                         if raw_data:
                             # Create a full trading day simulation (9:15 AM to 3:30 PM) from available data
+                            self.flow('M', 'Load Stored Data')
                             cached_stored_data = self._create_trading_day_simulation(raw_data)
+                            self.flow('N', 'Create Trading Simulation')
                             stored_data_index = 0  # Reset index
                             last_data_load_time = current_time_minutes
                             logger.info(f"🔄 Created trading day simulation with {len(cached_stored_data)} samples for offline mode")
@@ -4719,6 +4801,7 @@ class OptimizedATMAnalyzer:
                                 progress = f"[{stored_data_index}/{len(cached_stored_data)}]"
                                 sim_time = recent_entry['timestamp'][11:16]  # Extract HH:MM from timestamp
                                 print(f"{current_time} | 🌙 OFFLINE MODE {progress} | Simulating {sim_time} | UND: {underlying_value:.2f}")
+                                self.flow('O', 'Use Sequential Data')
                             
                         except Exception as e:
                             logger.error(f"Error processing stored data: {e}")
@@ -4782,6 +4865,7 @@ class OptimizedATMAnalyzer:
                 try:
                     filtered_df, atm_strike = self.get_nearest_strikes(df, underlying_value, 3)
                     last_valid_atm_strike = atm_strike  # Update fallback
+                    self.flow('P', 'Get Nearest Strikes')
                 except Exception as e:
                     logger.error(f"Error getting nearest strikes: {e}")
                     if last_valid_atm_strike is not None:
@@ -4818,13 +4902,17 @@ class OptimizedATMAnalyzer:
                     
                         # Check for paper trade exit first - with error handling
                         if self.paper_trade.active:
+                            self.flow('Z', 'Paper Trade Active? Yes')
                             try:
                                 exit_result = self.paper_trade.check_exit(filtered_df, signal, regime)
                                 if exit_result:
+                                    self.flow('AA', 'Check Exit Conditions')
+                                    self.flow('CC', 'Exit Signal? Yes')
                                     outcome, trade_pnl, trade_data = exit_result
                                     
                                     # 🚨 SEND EXIT SIGNAL TO TRADETRON (Signal = 0 means EXIT/NEUTRAL)
                                     if self.send_signal(0):  # Send neutral signal to exit position
+                                        self.flow('II', 'Send EXIT Signal to Tradetron')
                                         print(f"\n{'='*60}")
                                         print(f"{current_time} | 📡 EXIT SIGNAL SENT: ⚪ NEUTRAL (Trade Closed)")
                                         print(f"Exit Reason: {trade_data.get('exit_reason', 'Unknown')}")
@@ -4839,6 +4927,8 @@ class OptimizedATMAnalyzer:
                                     # Update ML with trade outcome
                                     try:
                                         self.update_signal_with_learning(outcome, trade_pnl, filtered_df, underlying_value, atm_strike, trade_data.get('position_size', 1))
+                                        self.flow('KK', 'Update ML with Trade Outcome')
+                                        self.flow('MM', 'Calculate Performance Metrics')
                                     except Exception as e:
                                         logger.error(f"Learning update error: {e}")
                         
@@ -4869,8 +4959,10 @@ class OptimizedATMAnalyzer:
                                 logger.error(f"Paper trade exit error: {e}")
                         
                         # Signal handling - only send during market hours or for exit signals
-                        if signal != self.last_sent_signal and is_market_hours:
-                            if signal != 0:  # Only send non-neutral signals during market hours
+                        if is_market_hours:
+                            # Only send non-neutral signals during market hours
+                            if signal != 0 and signal != self.last_sent_signal:
+                                self.flow('Y', 'Signal Generation')
                                 if self.send_signal(signal):
                                     self.last_sent_signal = signal  # Update only after successful send
                                     
@@ -4882,9 +4974,10 @@ class OptimizedATMAnalyzer:
                                     print(f"Strength: {strength} | Position Size: {position_size:.0f} lots ({position_size*Config.LOT_SIZE:.0f} contracts)")
                                     print(f"Regime: {regime} | Account Value: ₹{self.account_value:.2f}")
                                     print(f"{'='*60}\n")
-                                    
-                                    # Enter paper trade if not already in a trade
-                                    if not self.paper_trade.active:
+                                    # Enter paper trade if not already in a trade and strength above threshold
+                                    self.flow('BB', 'Check Entry Conditions')
+                                    self.flow('FF', f"Signal Strength > Threshold? {'Yes' if strength >= Config.SIGNAL_STRENGTH_THRESHOLD else 'No'}")
+                                    if not self.paper_trade.active and strength >= Config.SIGNAL_STRENGTH_THRESHOLD:
                                         # 🎯 SHORT STRATEGY: We short the option and profit when its price decreases
                                         # Signal 1 = SHORT PUT (enter at PUT price, profit when PUT price drops)
                                         # Signal -1 = SHORT CALL (enter at CALL price, profit when CALL price drops)
@@ -4896,6 +4989,7 @@ class OptimizedATMAnalyzer:
                                                 ml_predictions = self.current_ml_prediction
                                             
                                             self.paper_trade.enter(signal, current_ltp, atm_strike, position_size, regime, ml_predictions)
+                                            self.flow('GG', 'Enter Paper Trade')
                                             
                                             # Enhanced paper trade entry message
                                             if ml_predictions:
@@ -4918,6 +5012,19 @@ class OptimizedATMAnalyzer:
                                 else:
                                     print(f"{current_time} | ⚪ NEUTRAL: {analysis_msg}")
                     
+                        # Paper trade ENTRY when strength exceeds threshold even if no signal sent (e.g., offline or blocked send)
+                        if not self.paper_trade.active and signal != 0 and strength >= Config.SIGNAL_STRENGTH_THRESHOLD:
+                            self.flow('BB', 'Check Entry Conditions')
+                            self.flow('FF', 'Signal Strength > Threshold? Yes')
+                            current_ltp = atm_row['Put_LTP'] if signal == 1 else atm_row['Call_LTP']
+                            if current_ltp > 0:
+                                ml_predictions = None
+                                if hasattr(self, 'current_ml_prediction') and self.current_ml_prediction:
+                                    ml_predictions = self.current_ml_prediction
+                                self.paper_trade.enter(signal, current_ltp, atm_strike, position_size, regime, ml_predictions)
+                                self.flow('GG', 'Enter Paper Trade')
+                                print(f"{current_time} | 📝 Paper Trade Entered (threshold): {('SHORT PUT' if signal==1 else 'SHORT CALL')} @ {current_ltp:.2f} | Size: {position_size:.0f} lots")
+
                         # Update current signal for tracking
                         self.current_signal = signal
                         
@@ -4980,8 +5087,11 @@ class OptimizedATMAnalyzer:
                                         )
                                     
                                     # Retrain models with new market data
+                                    self.flow('OO', 'Retrain Models? Yes')
+                                    self.flow('PP', 'Model Training')
                                     if self.ml_engine.train_models():
                                         print(f"{current_time} | 🔄 Models retrained with {len(training_data)} market samples")
+                                        self.flow('QQ', 'Collect Market Data')
                         except Exception as e:
                             logger.error(f"Continuous learning error: {e}")
                     else:
@@ -5019,6 +5129,7 @@ class OptimizedATMAnalyzer:
                 if self.training_counter % 50 == 0:
                     try:
                         self.display_performance_metrics()
+                        self.flow('UU', 'Performance Display')
                         
                         # Display data statistics
                         stats = self.data_storage.get_data_statistics()
@@ -5030,10 +5141,13 @@ class OptimizedATMAnalyzer:
                 
                 # Sleep based on market hours and data availability
                 if is_market_hours:
+                    self.flow('WW', 'Sleep & Wait (live)')
                     time.sleep(60)  # 1 minute during market hours
                 elif cached_stored_data and len(cached_stored_data) > 0:
+                    self.flow('WW', 'Sleep & Wait (offline cached)')
                     time.sleep(0.1)  # Very fast processing when using cached data for offline simulation
                 else:
+                    self.flow('WW', 'Sleep & Wait (offline)')
                     time.sleep(1)   # 1 second during offline hours when no cached data
                 
             except KeyboardInterrupt:
@@ -5137,7 +5251,7 @@ class OptimizedATMAnalyzer:
                             })
                     
                     # GENERATE SIGNALS IN OFFLINE MODE (simulate signal generation)
-                    if signal != 0 and strength > 0:
+                    if signal != 0 and strength >= Config.SIGNAL_STRENGTH_THRESHOLD:
                         atm_data = filtered_df[filtered_df['Strike'] == atm_strike]
                         if not atm_data.empty:
                             atm_row = atm_data.iloc[0]
