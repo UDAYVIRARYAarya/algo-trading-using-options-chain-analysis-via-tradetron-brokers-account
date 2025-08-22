@@ -218,6 +218,7 @@ For questions, feedback, or collaboration:
             -1: "https://api.tradetron.tech/api?auth-token=YOURAPITOKEN&key=gap&value=-1",
             0: "https://api.tradetron.tech/api?auth-token=YOURAPITOKEN&key=gap&value=0"
         }
+        
 **Replace the token <YOURAPITOKEN> with the generated token example**
 self.TRADETRON_URLS = {
             1: "https://api.tradetron.tech/api?auth-token=2621e9d9-5349-41bf-b4d4-27acad38abe&key=gap&value=1",
