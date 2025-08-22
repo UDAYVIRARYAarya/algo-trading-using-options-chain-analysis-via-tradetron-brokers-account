@@ -233,7 +233,7 @@ self.TRADETRON_URLS = {
             0: "https://api.tradetron.tech/api?auth-token=2621e9d9-5349-41bf-b4d4-27acad38abe&key=gap&value=0"
 
         }
-
+```
 ---
 
 ## 📄 License
