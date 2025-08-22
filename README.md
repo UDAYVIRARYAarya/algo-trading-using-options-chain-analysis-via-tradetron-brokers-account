@@ -1,7 +1,7 @@
 
-# 🚀 Advanced Automated Options Trading System
+# 🚀 Advanced Automated Options Trading System generated using AI needs professional help to improve the code
 
-An AI-powered, fully automated options trading engine for Nifty Index, designed to **sell options** (SHORT CALL/PUT) based on real-time data, machine learning models, and quantitative risk controls. It integrates with **Tradetron API** for live execution and supports continuous learning and simulation.
+An AI-powered, fully automated options trading engine for the Nifty Index, designed to **sell options** (SHORT CALL/PUT) based on real-time data, machine learning models, and quantitative risk controls. It integrates with **Tradetron API** for live execution and supports continuous learning and simulation.
 
 ---
 
@@ -209,9 +209,21 @@ trading_system/
 
 For questions, feedback, or collaboration:
 
-📧 Email: `your_email@example.com`  
-🧠 Developer: `@yourgithubhandle`  
-🔗 Tradetron Strategy Page: *(optional link)*
+📧 Email: uday14viru@gmail.com  
+🔗 Tradetron Strategy Page: https://tradetron.tech/strategy/7909313 (Duplicate, you can modify to add stoploss and target, and other technical analysis using tradetron keywords )
+
+**Need to generate API token in Tradetron after duplicating the strategy**
+        self.TRADETRON_URLS = {
+            1: "https://api.tradetron.tech/api?auth-token=<YOURAPITOKEN>&key=gap&value=1",
+            -1: "https://api.tradetron.tech/api?auth-token=YOURAPITOKEN&key=gap&value=-1",
+            0: "https://api.tradetron.tech/api?auth-token=YOURAPITOKEN&key=gap&value=0"
+        }
+**Replace the token <YOURAPITOKEN> with the generated token example**
+self.TRADETRON_URLS = {
+            1: "https://api.tradetron.tech/api?auth-token=2621e9d9-5349-41bf-b4d4-27acad38abe&key=gap&value=1",
+            -1: "https://api.tradetron.tech/api?auth-token=2621e9d9-5349-41bf-b4d4-27acad38abe&key=gap&value=-1",
+            0: "https://api.tradetron.tech/api?auth-token=2621e9d9-5349-41bf-b4d4-27acad38abe&key=gap&value=0"
+        }
 
 ---
 
@@ -221,4 +233,4 @@ MIT License. Feel free to fork and adapt.
 
 ---
 
-> ⚠️ **Disclaimer**: This software is for educational and research purposes only. Options trading involves high risk. Use at your own discretion.
+> ⚠️ **Disclaimer**: This software is for educational and research purposes only. Options trading involves high risk. Use at your discretion. All code is generated using AI. 
