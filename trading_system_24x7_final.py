@@ -3770,7 +3770,6 @@ class OptimizedATMAnalyzer:
             -1: "https://api.tradetron.tech/api?auth-token=<YOURAPITOKEN>&key=gap&value=-1",
             0: "https://api.tradetron.tech/api?auth-token=<YOURAPITOKEN>&key=gap&value=0"
         }
-
         # Paper trade tracking
         self.paper_trade = PaperTrade()
         
@@ -4474,7 +4473,7 @@ class OptimizedATMAnalyzer:
                     if enhanced_confidence >= 0.75:  # Strong ML confidence overrides traditional
                         final_signal = ml_signal
                         final_strength = enhanced_confidence * 10
-            else:  
+                    else:
                         return 0, 0, f"ML/Traditional disagreement with moderate confidence - ML:{ml_signal} Trad:{traditional_signal}", 0, current_regime
 
     
